@@ -91,23 +91,23 @@ export default function App() {
       } catch (e) {}
     }
   };
-
   return (
-    <View style={{ paddingTop: 100, paddingLeft: 20 }}>
-      {/* 第一行：震动文本 + 原生开关(复选框) */}
+    <View style={{ flex: 1, backgroundColor: '#000000', paddingTop: 100, paddingLeft: 20 }}>
+      {/* 第一行：震动文本（白字） + 原生开关 */}
       <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }}>
-        <Text>振动？</Text>
+        <Text style={{ color: '#ffffff' }}>振动？</Text>
         <Switch value={isVibrate} onValueChange={toggleVibrate} />
       </View>
 
-      {/* 第二行：铃声文本 + 原生单行输入框 */}
+      {/* 第二行：铃声文本（白字） + 原生单行输入框（白边框、白字） */}
       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-        <Text>铃声？</Text>
+        <Text style={{ color: '#ffffff' }}>铃声？</Text>
         <TextInput 
           value={audioUrl} 
           onChangeText={saveUrl} 
           placeholder="请输入音频网址"
-          style={{ borderWidth: 1, borderColor: '#000', width: 250, marginLeft: 10, padding: 2 }}
+          placeholderTextColor="#666666"
+          style={{ borderWidth: 1, borderColor: '#ffffff', color: '#ffffff', width: 250, marginLeft: 10, padding: 2 }}
         />
       </View>
     </View>
