@@ -1,7 +1,12 @@
 {
   "expo": {
     "name": "charge-alert",
-    "slug": "snack-7676ae02-63e0-4509-82a1-c3def917ef62",
+    "slug": "charge-alert",
+    "extra": {
+      "eas": {
+        "projectId": "6d7acb1e-0e85-49b5-998f-21af4a475b1b"
+      }
+    },
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
