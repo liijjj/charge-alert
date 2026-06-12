@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, Switch, TextInput, Vibration, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, Switch, TextInput, Vibration, Button, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Audio } from 'expo-av';
 
@@ -9,16 +9,16 @@ export default function App() {
   
   const soundRef = useRef(null);
   const isPlayingRef = useRef(false);
-  const isPlayerLoading = useRef(false); // 新增防撞车锁：防止多线程同时加载引发重音
+  const isAudioLoadingRef = useRef(false); // 【新增核心防重锁】防止加载未完成时二次触发
 
   // 初始化：从本地存储读取上次保存的配置，并立刻触发警报
   useEffect(() => {
     const initAndStart = async () => {
       try {
-        // 全局音频模式配置：允许后台/锁屏不间断播放
+        // 1. 配置 Expo 核心音频系统：允许后台运行，锁屏不静音
         await Audio.setAudioModeAsync({
           allowsRecordingIOS: false,
-          staysActiveInBackground: true, // 核心：锁屏允许后台继续跑
+          staysActiveInBackground: true, // 👈 保证播放途中锁屏能持续播放
           interruptionModeIOS: Audio.INTERRUPTION_MODE_IOS_DO_NOT_MIX,
           playsInSilentModeIOS: true,
           shouldRouteThroughEarpieceAndroid: false,
@@ -34,8 +34,8 @@ export default function App() {
         setIsVibrate(vibrateEnabled);
         if (savedUrl !== null) setAudioUrl(savedUrl);
 
-        // 立刻启动报警
-        startAlert(vibrateEnabled, urlToPlay);
+        // 2. 立刻根据读取到的配置启动报警（只会触发一次）
+        await startAlert(vibrateEnabled, urlToPlay);
       } catch (e) {
         console.log('读取配置失败', e);
       }
@@ -43,74 +43,81 @@ export default function App() {
 
     initAndStart();
 
-    // 移除之前的 AppState 后台监听，不再让系统锁屏时去执行 stopAlert()
+    // 🗑️ 【彻底删除了 AppState 监听】
+    // 之前退后台会自动调用 stopAlert()，现在删掉后，哪怕锁屏代码也会在后台硬啃、持续播放！
+
     return () => {
       stopAlert();
     };
-  }, []);
+  }, []); // 👈 移除依赖项，确保仅在 App 点开启动的一瞬间执行一次，绝不重复！
 
-  // 保存“震动”配置并实时测试更新
+  // 保存“震动”配置
   const toggleVibrate = async (value) => {
     setIsVibrate(value);
     await AsyncStorage.setItem('isVibrate', String(value));
-    // 改变开关时重新触发一次，保证状态最新
-    startAlert(value, audioUrl);
+    // 状态改变时，如果是开启，重新刷一下状态
+    if (value && isPlayingRef.current) {
+      Vibration.cancel();
+      Vibration.vibrate([0, 1000, 500], true);
+    } else if (!value) {
+      Vibration.cancel();
+    }
   };
 
-  // 保存“音频链接”配置并无缝换歌
+  // 保存“音频链接”配置并切换播放
   const saveUrl = async (text) => {
     setAudioUrl(text);
     await AsyncStorage.setItem('audioUrl', text);
     if (text.trim() !== '') {
-      startAlert(isVibrate, text);
+      // 切换新歌时，先强制关闭旧的，再播新的
+      await stopAlert();
+      await startAlert(isVibrate, text);
     }
   };
 
-  // 启动报警逻辑（已完美解决重复、重音、锁屏积压问题）
+  // 启动报警逻辑
   const startAlert = async (vibrateOn, url) => {
-    // 如果正在加载中，直接拒绝后面的所有重复触发，防止解锁瞬间重音
-    if (isPlayerLoading.current) return;
-    isPlayerLoading.current = true;
+    // 【防重音双保险】如果正在播放或者正在加载音频，直接拦截，绝不重叠
+    if (isPlayingRef.current || isAudioLoadingRef.current) return;
+    isAudioLoadingRef.current = true;
 
-    try {
-      // 1. 每次播放新声音前，雷打不动先清理掉旧的实例，确保干净
-      if (soundRef.current) {
-        try {
+    if (vibrateOn) {
+      Vibration.cancel(); // 震动前清空残留，确保单次执行
+      Vibration.vibrate([0, 1000, 500], true);
+    }
+
+    if (url && url.trim() !== '') {
+      try {
+        // 先销毁可能遗留的实例
+        if (soundRef.current) {
           await soundRef.current.unloadAsync();
-        } catch (e) {}
-        soundRef.current = null;
-      }
-      Vibration.cancel();
-      isPlayingRef.current = false;
+          soundRef.current = null;
+        }
 
-      // 2. 触发震动（控制为只震动一次 1 秒，不重复、不循环）
-      if (vibrateOn) {
-        Vibration.vibrate(1000); 
-      }
-
-      // 3. 异步加载并播放唯一的一个铃声
-      if (url && url.trim() !== '') {
-        isPlayingRef.current = true;
         const { sound } = await Audio.Sound.createAsync(
           { uri: url }, 
           { 
             shouldPlay: true, 
-            isLooping: true, // 声音依然保持无限循环，直到拔线
-            stayAwake: true  // 播放时阻止 CPU 睡眠
+            isLooping: true,
+            stayAwake: true // 👈 核心：告诉系统保持音频硬件唤醒
           }
         );
         soundRef.current = sound;
+        isPlayingRef.current = true; // 确认播放成功后再锁住状态
+      } catch (error) {
+        console.log('音频播放失败，请检查链接是否正确', error);
+      } finally {
+        isAudioLoadingRef.current = false; // 解开加载锁
       }
-    } catch (error) {
-      console.log('音频播放失败，请检查链接是否正确', error);
-    } finally {
-      isPlayerLoading.current = false; // 解锁，允许下一次正常控制
+    } else {
+      isAudioLoadingRef.current = false;
     }
   };
 
   // 停止报警逻辑
   const stopAlert = async () => {
     isPlayingRef.current = false;
+    isAudioLoadingRef.current = false;
     Vibration.cancel();
     if (soundRef.current) {
       try {
@@ -121,15 +128,16 @@ export default function App() {
     }
   };
 
-  // 弹出简短的所需权限提示（只含名称）
-  const showPermissionsNotice = () => {
+  // 【新增提示函数】弹窗告知必要权限
+  const showPermissionNotice = () => {
     Alert.alert(
-      "使用前必要权限开启提示",
-      "为确保锁屏时能正常自动唤醒屏幕并播放，请检查并开启以下权限：\n\n" +
-      "1. 锁屏显示\n" +
-      "2. 后台弹出界面\n" +
-      "3. 省电策略设定为：无限制",
-      [{ text: "我知道了" }]
+      "📢 正常运行必要权限说明",
+      "为防止系统在后台和锁屏时杀掉本程序，请确保在系统设置中为本应用开启以下权限：\n\n" +
+      "1. 【后台弹出界面】（最关键！允许定时唤醒）\n" +
+      "2. 【锁屏显示】（允许在锁屏状态下展示界面）\n" +
+      "3. 【显示常亮通知 / 通知权限】\n" +
+      "4. 【省电策略】必须调整为 —— 无限制",
+      [{ text: "我知道了", style: "cancel" }]
     );
   };
 
@@ -141,8 +149,8 @@ export default function App() {
         <Switch value={isVibrate} onValueChange={toggleVibrate} />
       </View>
 
-      {/* 第二行：铃声文本（白字） + 原生单行输入框 */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 40 }}>
+      {/* 第二行：铃声文本（白字） + 原生单行输入框（白边框、白字） */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 30 }}>
         <Text style={{ color: '#ffffff' }}>铃声？</Text>
         <TextInput 
           value={audioUrl} 
@@ -153,13 +161,14 @@ export default function App() {
         />
       </View>
 
-      {/* 新增第三行：点击提示系统权限的“注意”按钮 */}
-      <TouchableOpacity 
-        onPress={showPermissionsNotice}
-        style={{ borderWidth: 1, borderColor: '#ffffff', paddingVertical: 10, paddingHorizontal: 20, width: 100, borderRadius: 4, alignItems: 'center' }}
-      >
-        <Text style={{ color: '#ffffff', fontWeight: 'bold' }}>注意</Text>
-      </TouchableOpacity>
+      {/* 第三行：【按要求新增】纯原生“注意”按钮 */}
+      <View style={{ width: 100, marginTop: 10 }}>
+        <Button 
+          title="注意" 
+          onPress={showPermissionNotice} 
+          color="#FF3B30" 
+        />
+      </View>
     </View>
   );
 }
